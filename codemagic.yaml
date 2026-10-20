@@ -1,19 +1,28 @@
+# Builds Side Button Pause (personal Geode mod) for Windows x64, GD 2.2091,
+# on the free mac_mini_m2 runner by cross-compiling: LLVM clang-cl + lld-link,
+# Windows SDK / MSVC CRT fetched via xwin (same recipe as win-mod-astra-2091).
 workflows:
   build-mod:
-    name: Build Side Button Pause (Win x64, GD 2.2091)
+    name: Side Button Pause (win, GD 2.2091)
     instance_type: mac_mini_m2
-    max_build_duration: 30
-
+    max_build_duration: 60
     environment:
+      xcode: 26.6
       vars:
-        GEODE_VERSION: "5.11.2"
+        XWIN_SDK: "10.0.26100"
         XWIN_ARCH: "x86_64"
-        XWIN_SDK: "10.0.22621.0"
+        BINDINGS_REF: "619c7de3cac2d14e57ca67ab7820057d079ddca6"
+        GEO_VER_TARGET: "2.2091"
+        GEO_COMP_TARGET: "22091"
+        GEODE_V6_REF: "777c2b6"
+    cache:
+      cache_paths:
+        - ~/.cpm-cache
+        - ~/.xwin-cache
 
     scripts:
-      - name: Toolchain (ninja, cmake, llvm, lld, xwin)
+      - name: Install build tools (xwin, ninja, cmake, llvm, lld)
         script: |
-          #!/usr/bin/env bash
           set -euo pipefail
           export HOMEBREW_NO_AUTO_UPDATE=1
           for f in xwin ninja cmake llvm lld; do
@@ -21,63 +30,64 @@ workflows:
               brew install "$f"
             fi
           done
+          export PATH="$(brew --prefix lld)/bin:$(brew --prefix llvm)/bin:$PATH"
+          echo "LLVM: $(clang-cl --version | head -1)"
 
-      - name: Windows SDK + MSVC CRT (xwin splat)
+      - name: Fetch Windows SDK + MSVC CRT via xwin (splat)
         script: |
-          #!/usr/bin/env bash
           set -euo pipefail
           mkdir -p "$HOME/.xwin-cache"
           xwin --cache-dir "$HOME/.xwin-cache" --arch "$XWIN_ARCH" --sdk-version "$XWIN_SDK" \
             --accept-license splat --include-debug-libs
 
-      - name: Geode SDK 5.11.2 + prebuilt win binaries + bindings + toolchain
+      - name: Clone pinned trees (geode v6, toolchain) + drop in prebuilt Geode.lib
         script: |
-          #!/usr/bin/env bash
           set -euo pipefail
-          if [ ! -x "$HOME/bin/geode" ]; then
-            mkdir -p "$HOME/bin"
-            curl -L --fail -o /tmp/geode-cli.zip \
-              "https://github.com/geode-sdk/cli/releases/download/v3.9.0/geode-cli-v3.9.0-mac.zip"
-            unzip -o /tmp/geode-cli.zip -d "$HOME/bin"
-            chmod +x "$HOME/bin/geode"
-          fi
-
-          export GEODE_SDK="$HOME/geode-sdk"
-          if [ ! -d "$GEODE_SDK" ]; then
-            git clone --depth 1 -b "v$GEODE_VERSION" https://github.com/geode-sdk/geode.git "$GEODE_SDK"
-            mkdir -p "$GEODE_SDK/bin/$GEODE_VERSION"
-            curl -L --fail -o /tmp/geode-win.zip \
-              "https://github.com/geode-sdk/geode/releases/download/v$GEODE_VERSION/geode-v$GEODE_VERSION-win.zip"
-            unzip -o /tmp/geode-win.zip -d "$GEODE_SDK/bin/$GEODE_VERSION"
-          fi
-
-          if [ ! -d "$HOME/bindings-repo" ]; then
-            git clone --depth 1 https://github.com/geode-sdk/bindings.git "$HOME/bindings-repo"
-          fi
-          if [ ! -f "$HOME/clang-msvc-sdk/clang-cl-msvc.cmake" ]; then
-            git clone --depth 1 https://github.com/geode-sdk/clang-msvc-sdk.git "$HOME/clang-msvc-sdk"
-          fi
-
-      - name: Configure + build mod
-        script: |
-          #!/usr/bin/env bash
-          set -euo pipefail
-          export PATH="$(brew --prefix lld)/bin:$(brew --prefix llvm)/bin:$PATH"
-          export GEODE_SDK="$HOME/geode-sdk"
-          export CPM_SOURCE_CACHE="$HOME/.cpm-cache"
-          mkdir -p "$CPM_SOURCE_CACHE"
           cd "$CM_BUILD_DIR"
+          git clone --depth 1 -b v6 https://github.com/geode-sdk/geode upstream-v6
+          current=$(git -C upstream-v6 rev-parse HEAD)
+          echo "geode v6 tip: $current (pinned: $GEODE_V6_REF)"
+          case "$current" in "$GEODE_V6_REF"*) ;; *) echo "NOTE: geode v6 moved past pin - continuing with current tip." ;; esac
+          # Prebuilt v6 loader import lib (same ABI as the installed loader).
+          mkdir -p upstream-v6/bin/nightly
+          curl -L --fail -o upstream-v6/bin/nightly/Geode.lib \
+            "https://raw.githubusercontent.com/Sk0vorodka/geode/ci-gd-209/pilot-sdk-bin/Geode.lib"
+          ls -la upstream-v6/bin/nightly/
+          git clone --depth 1 https://github.com/geode-sdk/clang-msvc-sdk clang-msvc-sdk
+          git clone https://github.com/geode-sdk/bindings bindings-repo
+          (cd bindings-repo && git checkout --detach "$BINDINGS_REF")
+          echo "bindings pinned at: $(git -C bindings-repo rev-parse HEAD)"
+
+      - name: Install Geode CLI (v3.9.0, macOS)
+        script: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          curl -L --fail -o /tmp/geode-cli.zip \
+            "https://github.com/geode-sdk/cli/releases/download/v3.9.0/geode-cli-v3.9.0-mac.zip"
+          unzip -o /tmp/geode-cli.zip -d "$HOME/bin"
+          chmod +x "$HOME/bin/geode"
+          "$HOME/bin/geode" --version || echo "geode CLI: (version unavailable)"
+
+      - name: Configure + build Side Button Pause (Windows x64, GD 2.2091)
+        script: |
+          set -euo pipefail
+          export PATH="$HOME/bin:$(brew --prefix lld)/bin:$(brew --prefix llvm)/bin:$PATH"
+          export CPM_SOURCE_CACHE="$HOME/.cpm-cache"
+          export GEODE_SDK="$CM_BUILD_DIR/upstream-v6"
+          export GEODE_BINDINGS_REPO_PATH="$CM_BUILD_DIR/bindings-repo"
+          mkdir -p "$CPM_SOURCE_CACHE"
+          cd "$CM_BUILD_DIR"   # mod sources are at the repo root
 
           echo "== configure =="
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_TOOLCHAIN_FILE="$HOME/clang-msvc-sdk/clang-cl-msvc.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$CM_BUILD_DIR/clang-msvc-sdk/clang-cl-msvc.cmake" \
             -DSPLAT_DIR="$HOME/.xwin-cache/splat" \
             -DHOST_ARCH="$XWIN_ARCH" \
-            -DGEODE_GD_VERSION="2.2091" \
-            -DGEODE_COMP_GD_VERSION="2.2091" \
-            -DGEODE_BINDINGS_PATH="$HOME/bindings-repo/bindings/2.2091" \
+            -DGEODE_GD_VERSION="$GEO_VER_TARGET" \
+            -DGEODE_COMP_GD_VERSION="$GEO_COMP_TARGET" \
+            -DGEODE_BINDINGS_PATH="$CM_BUILD_DIR/bindings-repo/bindings/2.2091" \
             -DGEODE_UNITY_BUILD=ON \
             -DGEODE_TARGET_PLATFORM=Win64 \
             -DGEODE_DONT_INSTALL_MODS=ON \
@@ -89,7 +99,8 @@ workflows:
           cmake --build build --config Release --parallel
 
           echo "== output .geode =="
-          find build -maxdepth 2 -name "*.geode" -exec ls -la {} \;
+          find "$CM_BUILD_DIR/build" -maxdepth 3 -name "*.geode" -exec ls -la {} \;
 
     artifacts:
-      - "**/*.geode"
+      - build/*.geode
+      - build/**/*.geode
