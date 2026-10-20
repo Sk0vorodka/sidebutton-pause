@@ -1,0 +1,11 @@
+{
+	"geode": "5.11.2",
+	"gd": {
+		"win": "*"
+	},
+	"version": "v1.0.0",
+	"id": "artem.sidebutton-pause",
+	"name": "Side Button Pause",
+	"developer": "artem",
+	"description": "Pause the level with both side mouse buttons (Mouse 4 / Mouse 5). Only works inside levels, never in menus."
+}

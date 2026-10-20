@@ -1,0 +1,95 @@
+workflows:
+  build-mod:
+    name: Build Side Button Pause (Win x64, GD 2.2091)
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+
+    environment:
+      vars:
+        GEODE_VERSION: "5.11.2"
+        XWIN_ARCH: "x86_64"
+        XWIN_SDK: "10.0.22621.0"
+
+    scripts:
+      - name: Toolchain (ninja, cmake, llvm, lld, xwin)
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          for f in xwin ninja cmake llvm lld; do
+            if ! command -v "$f" >/dev/null 2>&1; then
+              brew install "$f"
+            fi
+          done
+
+      - name: Windows SDK + MSVC CRT (xwin splat)
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          mkdir -p "$HOME/.xwin-cache"
+          xwin --cache-dir "$HOME/.xwin-cache" --arch "$XWIN_ARCH" --sdk-version "$XWIN_SDK" \
+            --accept-license splat --include-debug-libs
+
+      - name: Geode SDK 5.11.2 + prebuilt win binaries + bindings + toolchain
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ ! -x "$HOME/bin/geode" ]; then
+            mkdir -p "$HOME/bin"
+            curl -L --fail -o /tmp/geode-cli.zip \
+              "https://github.com/geode-sdk/cli/releases/download/v3.9.0/geode-cli-v3.9.0-mac.zip"
+            unzip -o /tmp/geode-cli.zip -d "$HOME/bin"
+            chmod +x "$HOME/bin/geode"
+          fi
+
+          export GEODE_SDK="$HOME/geode-sdk"
+          if [ ! -d "$GEODE_SDK" ]; then
+            git clone --depth 1 -b "v$GEODE_VERSION" https://github.com/geode-sdk/geode.git "$GEODE_SDK"
+            mkdir -p "$GEODE_SDK/bin/$GEODE_VERSION"
+            curl -L --fail -o /tmp/geode-win.zip \
+              "https://github.com/geode-sdk/geode/releases/download/v$GEODE_VERSION/geode-v$GEODE_VERSION-win.zip"
+            unzip -o /tmp/geode-win.zip -d "$GEODE_SDK/bin/$GEODE_VERSION"
+          fi
+
+          if [ ! -d "$HOME/bindings-repo" ]; then
+            git clone --depth 1 https://github.com/geode-sdk/bindings.git "$HOME/bindings-repo"
+          fi
+          if [ ! -f "$HOME/clang-msvc-sdk/clang-cl-msvc.cmake" ]; then
+            git clone --depth 1 https://github.com/geode-sdk/clang-msvc-sdk.git "$HOME/clang-msvc-sdk"
+          fi
+
+      - name: Configure + build mod
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export PATH="$(brew --prefix lld)/bin:$(brew --prefix llvm)/bin:$PATH"
+          export GEODE_SDK="$HOME/geode-sdk"
+          export CPM_SOURCE_CACHE="$HOME/.cpm-cache"
+          mkdir -p "$CPM_SOURCE_CACHE"
+          cd "$CM_BUILD_DIR"
+
+          echo "== configure =="
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_TOOLCHAIN_FILE="$HOME/clang-msvc-sdk/clang-cl-msvc.cmake" \
+            -DSPLAT_DIR="$HOME/.xwin-cache/splat" \
+            -DHOST_ARCH="$XWIN_ARCH" \
+            -DGEODE_GD_VERSION="2.2091" \
+            -DGEODE_COMP_GD_VERSION="2.2091" \
+            -DGEODE_BINDINGS_PATH="$HOME/bindings-repo/bindings/2.2091" \
+            -DGEODE_UNITY_BUILD=ON \
+            -DGEODE_TARGET_PLATFORM=Win64 \
+            -DGEODE_DONT_INSTALL_MODS=ON \
+            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
+            -DFMT_MODULE=OFF \
+            -DGEODE_CODEGEN_CMAKE_ARGS="-DCMAKE_C_COMPILER=clang;-DCMAKE_CXX_COMPILER=clang++;-G Ninja"
+
+          echo "== build =="
+          cmake --build build --config Release --parallel
+
+          echo "== output .geode =="
+          find build -maxdepth 2 -name "*.geode" -exec ls -la {} \;
+
+    artifacts:
+      - "**/*.geode"
