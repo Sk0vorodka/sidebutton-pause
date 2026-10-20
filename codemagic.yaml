@@ -19,6 +19,8 @@ workflows:
       cache_paths:
         - ~/.cpm-cache
         - ~/.xwin-cache
+        - ~/.geode-v6
+        - ~/.geode-bnd
 
     scripts:
       - name: Install build tools (xwin, ninja, cmake, llvm, lld)
@@ -40,23 +42,38 @@ workflows:
           xwin --cache-dir "$HOME/.xwin-cache" --arch "$XWIN_ARCH" --sdk-version "$XWIN_SDK" \
             --accept-license splat --include-debug-libs
 
-      - name: Clone pinned trees (geode v6, toolchain) + drop in prebuilt Geode.lib
+      - name: Clone geode v6 (pinned 777c2b6) + prebuilt Geode.lib + toolchain + bindings (pinned)
         script: |
           set -euo pipefail
-          cd "$CM_BUILD_DIR"
-          git clone --depth 1 -b v6 https://github.com/geode-sdk/geode upstream-v6
-          current=$(git -C upstream-v6 rev-parse HEAD)
-          echo "geode v6 tip: $current (pinned: $GEODE_V6_REF)"
-          case "$current" in "$GEODE_V6_REF"*) ;; *) echo "NOTE: geode v6 moved past pin - continuing with current tip." ;; esac
+          # geode v6: blobless clone (fast, cached), then hard-checkout the
+          # pinned commit so the tree matches the prebuilt Geode.lib ABI
+          # (newer codegen binaries emit includes newer trees lack).
+          if [ ! -d "$HOME/geode-v6/.git" ]; then
+            git clone --filter=blob:none -b v6 https://github.com/geode-sdk/geode "$HOME/geode-v6"
+          fi
+          git -C "$HOME/geode-v6" fetch --filter=blob:none origin v6 >/dev/null
+          pin=$(git -C "$HOME/geode-v6" rev-parse "$GEODE_V6_REF")
+          git -C "$HOME/geode-v6" checkout -q --detach "$pin"
+          echo "geode v6 pinned at: $pin"
+          rm -rf "$CM_BUILD_DIR/upstream-v6"
+          git -C "$HOME/geode-v6" worktree prune
+          git -C "$HOME/geode-v6" worktree add "$CM_BUILD_DIR/upstream-v6" HEAD
           # Prebuilt v6 loader import lib (same ABI as the installed loader).
           mkdir -p upstream-v6/bin/nightly
           curl -L --fail -o upstream-v6/bin/nightly/Geode.lib \
             "https://raw.githubusercontent.com/Sk0vorodka/geode/ci-gd-209/pilot-sdk-bin/Geode.lib"
           ls -la upstream-v6/bin/nightly/
-          git clone --depth 1 https://github.com/geode-sdk/clang-msvc-sdk clang-msvc-sdk
-          git clone https://github.com/geode-sdk/bindings bindings-repo
-          (cd bindings-repo && git checkout --detach "$BINDINGS_REF")
-          echo "bindings pinned at: $(git -C bindings-repo rev-parse HEAD)"
+
+          if [ ! -d "$HOME/geode-bnd/.git" ]; then
+            git clone https://github.com/geode-sdk/bindings "$HOME/geode-bnd"
+          fi
+          ( git -C "$HOME/geode-bnd" fetch origin >/dev/null || true; )
+          git -C "$HOME/geode-bnd" checkout -q --detach "$BINDINGS_REF"
+          echo "bindings pinned at: $(git -C "$HOME/geode-bnd" rev-parse HEAD)"
+
+          if [ ! -d "$HOME/clang-msvc-sdk/clang-cl-msvc.cmake" ]; then
+            git clone --depth 1 https://github.com/geode-sdk/clang-msvc-sdk "$HOME/clang-msvc-sdk"
+          fi
 
       - name: Install Geode CLI (v3.9.0, macOS)
         script: |
@@ -74,7 +91,7 @@ workflows:
           export PATH="$HOME/bin:$(brew --prefix lld)/bin:$(brew --prefix llvm)/bin:$PATH"
           export CPM_SOURCE_CACHE="$HOME/.cpm-cache"
           export GEODE_SDK="$CM_BUILD_DIR/upstream-v6"
-          export GEODE_BINDINGS_REPO_PATH="$CM_BUILD_DIR/bindings-repo"
+          export GEODE_BINDINGS_REPO_PATH="$HOME/geode-bnd"
           mkdir -p "$CPM_SOURCE_CACHE"
           cd "$CM_BUILD_DIR"   # mod sources are at the repo root
 
@@ -82,12 +99,13 @@ workflows:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_TOOLCHAIN_FILE="$CM_BUILD_DIR/clang-msvc-sdk/clang-cl-msvc.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$HOME/clang-msvc-sdk/clang-cl-msvc.cmake" \
             -DSPLAT_DIR="$HOME/.xwin-cache/splat" \
             -DHOST_ARCH="$XWIN_ARCH" \
             -DGEODE_GD_VERSION="$GEO_VER_TARGET" \
             -DGEODE_COMP_GD_VERSION="$GEO_COMP_TARGET" \
-            -DGEODE_BINDINGS_PATH="$CM_BUILD_DIR/bindings-repo/bindings/2.2091" \
+            -DGEODE_BINDINGS_PATH="$HOME/geode-bnd/bindings/2.2091" \
+            -DSKIP_BUILDING_CODEGEN=OFF \
             -DGEODE_UNITY_BUILD=ON \
             -DGEODE_TARGET_PLATFORM=Win64 \
             -DGEODE_DONT_INSTALL_MODS=ON \
