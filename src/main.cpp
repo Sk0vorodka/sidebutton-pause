@@ -113,7 +113,7 @@ namespace {
             return;
         }
 
-        log::info("raw input bridge ready (hwnd={})", static_cast<uintptr_t>(hwnd));
+        log::info("raw input bridge ready (hwnd={})", reinterpret_cast<uintptr_t>(hwnd));
     }
 }
 
