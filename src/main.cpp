@@ -1,41 +1,34 @@
 // artem.sidebutton-pause
 // Pausing the level with both side mouse buttons (Mouse 4 / Mouse 5).
 //
-// v1.0.4 - two extra "gameplay is actually running" gates on top of v1.0.3,
-// both real fields in the pinned 2.2091 bindings (619c7de):
-//  - death: during the death animation m_started/m_isPaused/PauseLayer-scan
-//    all look like normal gameplay, so pauseGame fired mid-death.
-//    Gate on GJBaseGameLayer::m_player1->m_isDead.
-//  - level end: after levelComplete() / the end-walk animation the PlayLayer
-//    is still the running scene and no PauseLayer exists, so pauseGame fired
-//    on top of the end screen. Gate on m_levelEndAnimationStarted and
-//    PlayLayer::m_hasCompletedLevel.
+// v1.0.5 - the field-read gates are gone. Runtime evidence (2026-10-21,
+// log Geode 22.35) showed that in GD 2.2091 the pinned bindings' field
+// layout for GJBaseGameLayer does not behave as the dataset suggests:
+// GJBaseGameLayer::m_started stayed 0 and m_loadingLayer stayed non-null
+// while the cube WAS moving, so pauseGame was never reachable. Conclusion:
+// do NOT gate on any GJBaseGameLayer/PlayLayer field. All state is now
+// derived from the running scene with typeinfo_cast (the technique that
+// is proven to work in this game):
+//  - PlayLayer on the scene  -> we are inside a level,
+//  - PauseLayer on the scene -> pause already open (also the guard that
+//    prevents the double-pauseGame crash),
+//  - a visible GJGameLoadingLayer on the scene -> level still loading.
+// Calling pauseGame(false) outside these states is vanilla-equivalent to
+// the game's own auto-pause on focus loss, which can happen at any moment
+// inside a level - including the death animation and the level end walk,
+// where both are known-good vanilla paths.
+// The suspect fields are still READ and LOGGED for diagnostics only,
+// every gate decision is logged for off-board analysis via geode logs.
 //
-// v1.0.3 - the working architecture after several on-device rounds:
-//
-//  * Input: Geode's loader-level MouseInputEvent works on this build (the
-//    game's raw-input window lives in libcocos2d.dll and the loader's
-//    pipeline dispatches MouseInputData with Button4/Button5). We do NOT
-//    touch WndProc or RegisterRawInputDevices at all.
-//
-//  * Level detection: the 2.2091 bindings dataset contains bodyless
-//    "= inline" stubs (PlayLayer::get(), GameManager::get()), so nothing
-//    that relies on them can be used. We typeinfo_cast-scan the running
-//    scene for the active PlayLayer instead (the game's real RTTI keeps
-//    this correct in menus, levels and editor lifecycles).
-//
-//  * Safety: pauseGame is queued to the next main-thread tick
-//    (queueInMainThread), gated on
-//     - a PauseLayer already on the scene (typeinfo scan),
-//     - PlayLayer::m_isPaused,
-//     - GJBaseGameLayer::m_loadingLayer == null && m_started == true
-//    so we never pause during level loading, death animation, outro or
-//    while the pause menu is already open - those were the states that
-//    produced the broken pause background and a driver crash.
+// v1.0.4 - extra "gameplay is actually running" gates on
+// m_player1->m_isDead / m_levelEndAnimationStarted / m_hasCompletedLevel.
+// v1.0.3 - loader MouseInputEvent + queueInMainThread + typeinfo scene scan
+// (no WndProc, no RegisterRawInputDevices, no "= inline;" stub callers).
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/PauseLayer.hpp>
+#include <Geode/binding/GJGameLoadingLayer.hpp>
 #include <Geode/utils/cocos.hpp>
 #include <Windows.h>
 
@@ -58,9 +51,12 @@ namespace {
         return nullptr;
     }
 
-    bool pauseLayerIsOpen() {
-        if (auto scene = CCDirector::get()->getRunningScene())
-            return scanForType<PauseLayer>(scene) != nullptr;
+    template <class T>
+    bool layerIsInScene() {
+        if (auto scene = CCDirector::get()->getRunningScene()) {
+            auto* layer = scanForType<T>(scene);
+            return layer != nullptr && layer->isVisible();
+        }
         return false;
     }
 
@@ -77,28 +73,32 @@ namespace {
             log::info("side button: game is not the foreground window - ignoring");
             return;
         }
-        auto pl = findActivePlayLayer();
+        auto scene = CCDirector::get()->getRunningScene();
+        if (!scene) return;
+        auto pl = scanForType<PlayLayer>(scene);
         if (!pl) {
             log::info("side button: not inside a level - ignoring");
             return;
         }
-        bool pausedFlag = pl->m_isPaused;
-        bool openLayer = pauseLayerIsOpen();
-        bool notReady = !pl->m_started || pl->m_loadingLayer != nullptr;
-        bool playerDead = pl->m_player1 != nullptr && pl->m_player1->m_isDead;
-        bool levelEnding = pl->m_levelEndAnimationStarted || pl->m_hasCompletedLevel;
+        bool pauseOpen = layerIsInScene<PauseLayer>();
+        bool loadingOpen = layerIsInScene<GJGameLoadingLayer>();
         log::info(
-            "side button: inLevel=1 isPaused={} pauseOpen={} started={} loadingLayer={} dead={} ending={}",
-            pausedFlag ? 1 : 0,
-            openLayer ? 1 : 0,
+            "side button: inLevel=1 pauseOnScene={} loadingOnScene={} | fields(m_isPaused={} m_started={} m_loadingField={})",
+            pauseOpen ? 1 : 0,
+            loadingOpen ? 1 : 0,
+            pl->m_isPaused ? 1 : 0,
             pl->m_started ? 1 : 0,
-            (pl->m_loadingLayer != nullptr) ? 1 : 0,
-            playerDead ? 1 : 0,
-            levelEnding ? 1 : 0
+            (pl->m_loadingLayer != nullptr) ? 1 : 0
         );
-        if (pausedFlag || openLayer || notReady || playerDead || levelEnding) return;
+        if (pauseOpen || loadingOpen) return;
         pl->pauseGame(false);
-        log::info("side button: pauseGame(false) called, m_isPaused now={}", pl->m_isPaused ? 1 : 0);
+        auto after = CCDirector::get()->getRunningScene();
+        bool pauseNow = after != nullptr && scanForType<PauseLayer>(after) != nullptr;
+        log::info(
+            "side button: pauseGame(false) called -> m_isPaused={} pauseOnScene={} (field reads can be wrong on 2.2091)",
+            pl->m_isPaused ? 1 : 0,
+            pauseNow ? 1 : 0
+        );
     }
 }
 
@@ -112,10 +112,10 @@ $on_mod(Loaded) {
             return ListenerResult::Propagate;
 
         // Run the decision on the next scheduler tick instead of inside the
-        // raw-input WndProc chain, so pauseGame never runs mid-frame.
+        // loader's input pipeline, so pauseGame never runs mid-frame.
         queueInMainThread([] { tryPause(); });
         return ListenerResult::Propagate;
     }).leak();
 
-    log::info("Side Button Pause v1.0.4 loaded: Mouse 4 / Mouse 5 pause the level");
+    log::info("Side Button Pause v1.0.5 loaded: Mouse 4 / Mouse 5 pause the level");
 }
