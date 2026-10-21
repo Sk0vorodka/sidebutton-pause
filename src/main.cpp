@@ -16,7 +16,7 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/binding/PlayLayer.hpp>
-#include <Geode/binding/CCEGLView.hpp>
+#include <Geode/modify/CCEGLView.hpp>
 #include <Geode/utils/Keyboard.hpp>
 #include <Geode/loader/ModEvent.hpp>
 #include <Windows.h>
