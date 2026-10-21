@@ -3,7 +3,7 @@
 	"gd": {
 		"win": "*"
 	},
-	"version": "v1.0.3",
+	"version": "v1.0.4",
 	"id": "artem.sidebutton-pause",
 	"name": "Side Button Pause",
 	"developer": "artem",

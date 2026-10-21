@@ -1,6 +1,16 @@
 // artem.sidebutton-pause
 // Pausing the level with both side mouse buttons (Mouse 4 / Mouse 5).
 //
+// v1.0.4 - two extra "gameplay is actually running" gates on top of v1.0.3,
+// both real fields in the pinned 2.2091 bindings (619c7de):
+//  - death: during the death animation m_started/m_isPaused/PauseLayer-scan
+//    all look like normal gameplay, so pauseGame fired mid-death.
+//    Gate on GJBaseGameLayer::m_player1->m_isDead.
+//  - level end: after levelComplete() / the end-walk animation the PlayLayer
+//    is still the running scene and no PauseLayer exists, so pauseGame fired
+//    on top of the end screen. Gate on m_levelEndAnimationStarted and
+//    PlayLayer::m_hasCompletedLevel.
+//
 // v1.0.3 - the working architecture after several on-device rounds:
 //
 //  * Input: Geode's loader-level MouseInputEvent works on this build (the
@@ -75,14 +85,18 @@ namespace {
         bool pausedFlag = pl->m_isPaused;
         bool openLayer = pauseLayerIsOpen();
         bool notReady = !pl->m_started || pl->m_loadingLayer != nullptr;
+        bool playerDead = pl->m_player1 != nullptr && pl->m_player1->m_isDead;
+        bool levelEnding = pl->m_levelEndAnimationStarted || pl->m_hasCompletedLevel;
         log::info(
-            "side button: inLevel=1 isPaused={} pauseOpen={} started={} loadingLayer={}",
+            "side button: inLevel=1 isPaused={} pauseOpen={} started={} loadingLayer={} dead={} ending={}",
             pausedFlag ? 1 : 0,
             openLayer ? 1 : 0,
             pl->m_started ? 1 : 0,
-            (pl->m_loadingLayer != nullptr) ? 1 : 0
+            (pl->m_loadingLayer != nullptr) ? 1 : 0,
+            playerDead ? 1 : 0,
+            levelEnding ? 1 : 0
         );
-        if (pausedFlag || openLayer || notReady) return;
+        if (pausedFlag || openLayer || notReady || playerDead || levelEnding) return;
         pl->pauseGame(false);
         log::info("side button: pauseGame(false) called, m_isPaused now={}", pl->m_isPaused ? 1 : 0);
     }
@@ -103,5 +117,5 @@ $on_mod(Loaded) {
         return ListenerResult::Propagate;
     }).leak();
 
-    log::info("Side Button Pause v1.0.3 loaded: Mouse 4 / Mouse 5 pause the level");
+    log::info("Side Button Pause v1.0.4 loaded: Mouse 4 / Mouse 5 pause the level");
 }

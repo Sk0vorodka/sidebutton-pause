@@ -119,6 +119,22 @@ workflows:
           echo "== output .geode =="
           find "$CM_BUILD_DIR/build" -maxdepth 3 -name "*.geode" -exec ls -la {} \;
 
+      - name: Publish .geode to GitHub Releases (skipped when GITHUB_TOKEN is absent)
+        script: |
+          set -euo pipefail
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            echo "GITHUB_TOKEN not set - skipping GitHub release publish"
+            exit 0
+          fi
+          export GH_TOKEN="$GITHUB_TOKEN"
+          gh release create "ci-$CM_BUILD_NUMBER" \
+            --repo Sk0vorodka/sidebutton-pause \
+            --target "$CM_COMMIT" \
+            --title "build $CM_BUILD_NUMBER" \
+            --notes "Automated Side Button Pause build $CM_BUILD_NUMBER ($CM_COMMIT)" \
+            build/*.geode
+          gh release view "ci-$CM_BUILD_NUMBER" --repo Sk0vorodka/sidebutton-pause --json assets,url
+
     artifacts:
       - build/*.geode
       - build/**/*.geode
