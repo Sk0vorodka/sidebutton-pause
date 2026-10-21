@@ -196,7 +196,7 @@ namespace {
                     log::info(
                         "raw input sink subclassed (hwnd={} prevProc={})",
                         reinterpret_cast<uintptr_t>(target),
-                        reinterpret_cast<uintptr_t>(prev)
+                        static_cast<uintptr_t>(prev)
                     );
                     return;
                 }
